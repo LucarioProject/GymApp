@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="description" content="App de control de gimnasio - Mediciones corporales" />
+    <meta name="theme-color" content="#6366f1" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Gym App" />
+    <title>Gym App - Control de Mediciones</title>
+    <base href="/GymApp/" />
+    <link href="css/app.css" rel="stylesheet" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icon-512.png" />
+</head>
+
+<body>
+    <div id="app">
+        <div style="display: flex; justify-content: center; align-items: center; height: 100vh;">
+            <div style="text-align: center;">
+                <div class="spinner"></div>
+                <p>Cargando...</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        Se ha producido un error. Esta aplicación no responderá hasta que se recargue.
+        <a href="" class="reload">Recargar</a>
+        <a class="dismiss">🗙</a>
+    </div>
+    <script>
+        // Aplicar tema inmediatamente antes de que Blazor cargue para evitar flash blanco
+        (function() {
+            try {
+                const theme = localStorage.getItem('theme') || 'light';
+                if (theme === 'dark') {
+                    document.documentElement.classList.add('dark-mode');
+                    document.body.classList.add('dark-mode');
+                } else {
+                    document.documentElement.classList.remove('dark-mode');
+                    document.body.classList.remove('dark-mode');
+                }
+            } catch (e) {
+                // Si localStorage no está disponible, usar tema claro por defecto
+            }
+        })();
+        
+        // SOLUCIÓN DEFINITIVA: Deshabilitar SRI completamente en desarrollo
+        // Interceptar ANTES de que Blazor cargue cualquier cosa
+        (function() {
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                console.log('[SRI Bypass] Activado para desarrollo local');
+                
+                // Interceptar y remover atributos integrity de todos los scripts
+                const originalCreateElement = document.createElement;
+                document.createElement = function(tagName, options) {
+                    const element = originalCreateElement.call(document, tagName, options);
+                    if (tagName.toLowerCase() === 'script' || tagName.toLowerCase() === 'link') {
+                        Object.defineProperty(element, 'integrity', {
+                            set: function() { /* Ignorar - no establecer integrity */ },
+                            get: function() { return ''; },
+                            configurable: true
+                        });
+                        Object.defineProperty(element, 'crossOrigin', {
+                            set: function() { /* Ignorar */ },
+                            get: function() { return null; },
+                            configurable: true
+                        });
+                    }
+                    return element;
+                };
+                
+                // Interceptar fetch para remover integrity de las peticiones y blazor.boot.json
+                const originalFetch = window.fetch;
+                window.fetch = function(...args) {
+                    const url = args[0];
+                    const init = args[1] || {};
+                    
+                    // Remover integrity de las opciones de fetch
+                    if (init.integrity) {
+                        delete init.integrity;
+                    }
+                    
+                    if (typeof url === 'string') {
+                        // Interceptar blazor.boot.json para remover integrity
+                        if (url.includes('blazor.boot.json')) {
+                            return originalFetch.apply(this, [url, init]).then(response => {
+                                if (response.ok) {
+                                    return response.clone().json().then(data => {
+                                        // Remover todos los integrity de los assets
+                                        if (data.resources) {
+                                            // Assembly resources
+                                            if (data.resources.assembly) {
+                                                Object.keys(data.resources.assembly).forEach(key => {
+                                                    if (data.resources.assembly[key] && typeof data.resources.assembly[key] === 'object') {
+                                                        delete data.resources.assembly[key].integrity;
+                                                    }
+                                                });
+                                            }
+                                            // PDB resources
+                                            if (data.resources.pdb) {
+                                                Object.keys(data.resources.pdb).forEach(key => {
+                                                    if (data.resources.pdb[key] && typeof data.resources.pdb[key] === 'object') {
+                                                        delete data.resources.pdb[key].integrity;
+                                                    }
+                                                });
+                                            }
+                                            // Runtime resources
+                                            if (data.resources.runtime) {
+                                                Object.keys(data.resources.runtime).forEach(key => {
+                                                    if (data.resources.runtime[key] && typeof data.resources.runtime[key] === 'object') {
+                                                        delete data.resources.runtime[key].integrity;
+                                                    }
+                                                });
+                                            }
+                                        }
+                                        return new Response(JSON.stringify(data), {
+                                            status: response.status,
+                                            statusText: response.statusText,
+                                            headers: response.headers
+                                        });
+                                    });
+                                }
+                                return response;
+                            });
+                        }
+                    }
+                    return originalFetch.apply(this, [url, init]);
+                };
+                
+                // Interceptar XMLHttpRequest también (por si acaso)
+                const originalXHROpen = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+                    this.addEventListener('load', function() {
+                        if (url && url.includes('blazor.boot.json')) {
+                            try {
+                                const responseText = this.responseText;
+                                const data = JSON.parse(responseText);
+                                if (data.resources) {
+                                    Object.keys(data.resources).forEach(resourceType => {
+                                        if (data.resources[resourceType]) {
+                                            Object.keys(data.resources[resourceType]).forEach(key => {
+                                                if (data.resources[resourceType][key] && typeof data.resources[resourceType][key] === 'object') {
+                                                    delete data.resources[resourceType][key].integrity;
+                                                }
+                                            });
+                                        }
+                                    });
+                                }
+                                Object.defineProperty(this, 'responseText', {
+                                    get: function() { return JSON.stringify(data); },
+                                    configurable: true
+                                });
+                            } catch (e) {
+                                console.warn('[SRI Bypass] Error procesando XHR:', e);
+                            }
+                        }
+                    });
+                    return originalXHROpen.apply(this, [method, url, ...rest]);
+                };
+                
+                // Remover integrity de scripts existentes después de que se carguen
+                const observer = new MutationObserver(function(mutations) {
+                    mutations.forEach(function(mutation) {
+                        mutation.addedNodes.forEach(function(node) {
+                            if (node.nodeType === 1) { // Element node
+                                if (node.tagName === 'SCRIPT' || node.tagName === 'LINK') {
+                                    node.removeAttribute('integrity');
+                                    node.removeAttribute('crossorigin');
+                                }
+                                // También buscar en hijos
+                                const scripts = node.querySelectorAll ? node.querySelectorAll('script[integrity], link[integrity]') : [];
+                                scripts.forEach(function(script) {
+                                    script.removeAttribute('integrity');
+                                    script.removeAttribute('crossorigin');
+                                });
+                            }
+                        });
+                    });
+                });
+            observer.observe(document.head, { childList: true, subtree: true });
+            observer.observe(document.body, { childList: true, subtree: true });
+        }
+        })();
+    </script>
+    <script src="_framework/blazor.webassembly.js"></script>
+    <script src="js/localStorage.js"></script>
+    <script src="js/swipeable.js"></script>
+    <script src="js/swipeable-table.js"></script>
+    <script src="js/theme.js"></script>
+    <script src="js/confirm.js"></script>
+    <script src="js/swipeable-card.js"></script>
+    <script src="js/pdf-generator.js"></script>
+    <script src="js/measurement-input.js"></script>
+    <script>
+        // Service worker disabled for local development
+        // (function() {
+        //     if ('serviceWorker' in navigator) {
+        //         window.addEventListener('load', function() {
+        //             navigator.serviceWorker.register('/service-worker.js')
+        //                 .then(function(registration) {
+        //                     console.log('ServiceWorker registered successfully');
+        //                 })
+        //                 .catch(function(err) {
+        //                     console.log('ServiceWorker registration failed: ', err);
+        //                 });
+        //         });
+        //     }
+        // })();
+    </script>
+</body>
+
+</html>
